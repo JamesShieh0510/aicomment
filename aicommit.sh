@@ -138,7 +138,7 @@ ${staged_diff}
     # Ask user if they want to commit
     read "?Do you want to commit with this message? (y/N): " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        git commit -m "$commit_msg"
+        git commit -m "$(echo -e "$commit_msg")"
         echo "Committed successfully!"
     else
         echo "Commit cancelled."
