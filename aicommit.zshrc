@@ -81,7 +81,7 @@ ${staged_diff}
     # Use ollama run command - much simpler and faster
     local commit_msg=""
     
-    commit_msg=$(echo "$ollama_prompt" | ollama run "$model" --hidethinking 2>&1)
+    commit_msg=$(echo "$ollama_prompt" | TERM=dumb ollama run "$model" --hidethinking 2>/dev/null)
     
     local ollama_exit_code=$?
     
