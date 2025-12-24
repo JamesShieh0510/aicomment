@@ -135,10 +135,11 @@ sudo apt-get install jq
 ```
 
 
-# Apple M3 Max (Memory: 128 GB) models
+### Model Suggestion
+
 ```bash
-llama3.3:70b
 deepseek-r1:70b
+llama3.3:70b
 deepseek-r1:8b
 gemma3:1b
 llama2
