@@ -134,3 +134,13 @@ brew install jq
 sudo apt-get install jq
 ```
 
+
+# Apple M3 Max (Memory: 128 GB) models
+```bash
+llama3.3:70b
+deepseek-r1:70b
+deepseek-r1:8b
+gemma3:1b
+llama2
+qwen3-vl:4b
+```
