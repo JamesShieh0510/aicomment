@@ -49,6 +49,15 @@ export OLLAMA_MODEL="llama2"
 
 If `OLLAMA_MODEL` is not set, the function will automatically fetch the first available model from Ollama.
 
+### Set Commit Message Language (Optional)
+
+You can specify the language for the generated commit message using the `AICOMMIT_LANG` environment variable (default is `English`):
+
+```bash
+# Add to ~/.zshrc for Traditional Chinese
+export AICOMMIT_LANG="Traditional Chinese"
+```
+
 ## Usage
 
 1. Stage your changes:

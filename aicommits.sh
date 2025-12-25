@@ -28,6 +28,7 @@ aicommits() {
 
     # Get model from environment variable or fetch from Ollama
     local model="${OLLAMA_MODEL:-}"
+    local lang="${AICOMMIT_LANG:-English}"
     
     if [ -z "$model" ]; then
         echo "No OLLAMA_MODEL set, fetching available models from ${ollama_host}..."
@@ -68,6 +69,7 @@ aicommits() {
     # Prepare the prompt for Ollama
     local ollama_prompt="Generate a concise git commit message based on the following diff. 
 The commit message should follow conventional commit format if applicable.
+The commit message MUST be in ${lang}.
 IMPORTANT: Return ONLY the commit message text, no markdown formatting, no code blocks, no backticks, no explanations.
 Just the plain commit message text.
 
@@ -75,78 +77,94 @@ Just the plain commit message text.
 ${staged_diff}
 \`\`\`"
 
-    # Call Ollama API to generate commit message
-    echo "Using server: ${ollama_host}"
-    echo "Generating commit message via API..."
-    
-    local start_time=$SECONDS
-    local commit_msg=""
-    local response_json=""
-    local tmp_payload=$(mktemp)
-
-    # Clean up temp file on exit
-    trap "rm -f '$tmp_payload'" EXIT
-
-    # Use jq to build clean JSON payload in a file
-    if command -v jq > /dev/null 2>&1; then
-        jq -n --arg model "$model" --arg prompt "$ollama_prompt" \
-           '{model: $model, prompt: $prompt, stream: false}' > "$tmp_payload"
+    local user_feedback=""
+    while true; do
+        # Call Ollama API to generate commit message
+        echo "Using server: ${ollama_host}"
+        echo "Generating commit message via API..."
         
-        # Pipe directly to jq to avoid shell variable mangling
-        # We also use tr to remove any unexpected raw control characters that might break jq
-        commit_msg=$(curl -s -X POST "${ollama_host}/api/generate" \
-            -H "Content-Type: application/json" \
-            --data-binary @"$tmp_payload" | tr -d '\000-\010\013\014\016-\037' | jq -r '.response // empty')
-    else
-        # Fallback if jq is not installed
-        printf '{"model": "%s", "prompt": "%s", "stream": false}' \
-               "$model" "$(echo "$ollama_prompt" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')" > "$tmp_payload"
+        local start_time=$SECONDS
+        local commit_msg=""
+        local response_json=""
+        local tmp_payload=$(mktemp)
+
+        # Clean up temp file on exit (re-defined trap for loop safety)
+        trap "rm -f '$tmp_payload'" EXIT
+
+        local current_prompt="$ollama_prompt"
+        if [ -n "$user_feedback" ]; then
+            current_prompt="${current_prompt}\n\nPrevious suggestion: ${commit_msg_raw}\nFeedback: ${user_feedback}\nPlease improve the message based on this feedback while still following the original instructions."
+        fi
+
+        # Use jq to build clean JSON payload in a file
+        if command -v jq > /dev/null 2>&1; then
+            jq -n --arg model "$model" --arg prompt "$current_prompt" \
+               '{model: $model, prompt: $prompt, stream: false}' > "$tmp_payload"
+            
+            # Pipe directly to jq to avoid shell variable mangling
+            commit_msg=$(curl -s -X POST "${ollama_host}/api/generate" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$tmp_payload" | tr -d '\000-\010\013\014\016-\037' | jq -r '.response // empty')
+        else
+            # Fallback if jq is not installed
+            printf '{"model": "%s", "prompt": "%s", "stream": false}' \
+                   "$model" "$(echo "$current_prompt" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')" > "$tmp_payload"
+            
+            response_json=$(curl -s -X POST "${ollama_host}/api/generate" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$tmp_payload")
+            
+            commit_msg=$(echo "$response_json" | grep -o '"response":"[^"]*"' | sed 's/"response":"\(.*\)"/\1/' | sed 's/\\n/\n/g' | sed 's/\\"/"/g')
+        fi
+
+        local end_time=$SECONDS
+        local duration=$(( end_time - start_time ))
+
+        # Remove temporary file
+        rm -f "$tmp_payload"
+        trap - EXIT
+
+        if [ -z "$commit_msg" ]; then
+            echo "Error: Failed to generate commit message from Ollama API."
+            return 1
+        fi
+
+        # Remove any triple backticks
+        commit_msg=$(echo "$commit_msg" | sed 's/```//g')
         
-        response_json=$(curl -s -X POST "${ollama_host}/api/generate" \
-            -H "Content-Type: application/json" \
-            --data-binary @"$tmp_payload")
+        # Store raw message for potential feedback loop
+        local commit_msg_raw="$commit_msg"
+
+        # If user provided a prefix, prepend it
+        if [ -n "${1:-}" ]; then
+            commit_msg="${1}: ${commit_msg}"
+        fi
+
+        # Record Which AI Model is used for commit msg
+        local model_info="[Generated by ${model}]"
+        local final_commit_msg="${commit_msg} | ${model_info}"
         
-        commit_msg=$(echo "$response_json" | grep -o '"response":"[^"]*"' | sed 's/"response":"\(.*\)"/\1/' | sed 's/\\n/\n/g' | sed 's/\\"/"/g')
-    fi
+        echo ""
+        echo "Suggested commit message:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "$final_commit_msg"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Time taken: ${duration}s"
+        echo ""
 
-    local end_time=$SECONDS
-    local duration=$(( end_time - start_time ))
-
-    # Remove temporary file
-    rm -f "$tmp_payload"
-    trap - EXIT
-
-    if [ -z "$commit_msg" ]; then
-        echo "Error: Failed to generate commit message from Ollama API."
-        return 1
-    fi
-
-    # Remove any triple backticks if the model included them
-    commit_msg=$(echo "$commit_msg" | sed 's/```//g')
-    
-    # If user provided a prefix, prepend it
-    if [ -n "${1:-}" ]; then
-        commit_msg="${1}: ${commit_msg}"
-    fi
-
-    # Record Which AI Model is used for commit msg
-    model_info="[Generated by ${model}]"
-    commit_msg="${commit_msg} | ${model_info}"
-    
-    echo ""
-    echo "Suggested commit message:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "$commit_msg"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Time taken: ${duration}s"
-    echo ""
-
-    # Ask user if they want to commit
-    read "?Do you want to commit with this message? (y/N): " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        git commit -m "$(echo -e "$commit_msg")"
-        echo "Committed successfully!"
-    else
-        echo "Commit cancelled."
-    fi
+        # Ask user if they want to commit
+        read "?Do you want to commit? (y)es / (N)o / (r)ewrite with feedback: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            git commit -m "$(echo -e "$final_commit_msg")"
+            echo "Committed successfully!"
+            break
+        elif [[ "$confirm" =~ ^[Rr]$ ]]; then
+            read "?Enter your feedback for the AI: " user_feedback
+            echo ""
+            continue
+        else
+            echo "Commit cancelled."
+            break
+        fi
+    done
 }
