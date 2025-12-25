@@ -1,8 +1,12 @@
-# aicommit function - Generate commit messages using Ollama
-# Usage: aicommit [optional commit message prefix]
-# Add this function to your ~/.zshrc file
+#!/bin/zsh
 
-aicommit() {
+# aicommits function - Generate commit messages using Ollama API (HTTP)
+# Usage: aicommits [optional commit message prefix]
+# Environment Variables:
+#   OLLAMA_HOST: Default to http://localhost:11434
+#   OLLAMA_MODEL: Default to the first available model
+
+aicommits() {
     # Check if there are any staged changes
     if git diff --cached --quiet; then
         echo "No staged changes found. Please run 'git add' first."
@@ -17,21 +21,26 @@ aicommit() {
         return 1
     fi
 
+    # Set Ollama Host
+    local ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
+    # Remove trailing slash if present
+    ollama_host="${ollama_host%/}"
+
     # Get model from environment variable or fetch from Ollama
     local model="${OLLAMA_MODEL:-}"
     
     if [ -z "$model" ]; then
-        echo "No OLLAMA_MODEL set, fetching available models..."
+        echo "No OLLAMA_MODEL set, fetching available models from ${ollama_host}..."
         
         # Check if Ollama is running
-        if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-            echo "Error: Ollama is not running or not accessible at http://localhost:11434"
-            echo "Please start Ollama or check your connection."
+        if ! curl -s "${ollama_host}/api/tags" > /dev/null 2>&1; then
+            echo "Error: Ollama is not running or not accessible at ${ollama_host}"
+            echo "Please start Ollama or check your connection/OLLAMA_HOST variable."
             return 1
         fi
         
         # Fetch available models
-        local models_json=$(curl -s http://localhost:11434/api/tags)
+        local models_json=$(curl -s "${ollama_host}/api/tags")
         
         if [ -z "$models_json" ] || [ "$models_json" = "null" ]; then
             echo "Error: Failed to fetch models from Ollama."
@@ -48,7 +57,6 @@ aicommit() {
         
         if [ -z "$model" ] || [ "$model" = "null" ]; then
             echo "Error: No models found in Ollama. Please install a model first."
-            echo "Example: ollama pull llama2"
             return 1
         fi
         
@@ -58,7 +66,6 @@ aicommit() {
     fi
 
     # Prepare the prompt for Ollama
-    # Use ollama_prompt instead of prompt to avoid conflict with zsh's built-in prompt variable
     local ollama_prompt="Generate a concise git commit message based on the following diff. 
 The commit message should follow conventional commit format if applicable.
 IMPORTANT: Return ONLY the commit message text, no markdown formatting, no code blocks, no backticks, no explanations.
@@ -68,45 +75,61 @@ Just the plain commit message text.
 ${staged_diff}
 \`\`\`"
 
-    # Call Ollama CLI to generate commit message (much faster than curl)
-    echo "Generating commit message..."
+    # Call Ollama API to generate commit message
+    echo "Using server: ${ollama_host}"
+    echo "Generating commit message via API..."
     
-    # Check if ollama command is available
-    if ! command -v ollama > /dev/null 2>&1; then
-        echo "Error: ollama command not found. Please install Ollama CLI."
-        echo "Visit: https://ollama.ai"
-        return 1
-    fi
-    
-    # Use ollama run command - much simpler and faster
-    local commit_msg=""
     local start_time=$SECONDS
-    
-    commit_msg=$(echo "$ollama_prompt" | TERM=dumb ollama run "$model" --hidethinking 2>/dev/null)
+    local commit_msg=""
+    local response_json=""
+    local tmp_payload=$(mktemp)
+
+    # Clean up temp file on exit
+    trap "rm -f '$tmp_payload'" EXIT
+
+    # Use jq to build clean JSON payload in a file
+    if command -v jq > /dev/null 2>&1; then
+        jq -n --arg model "$model" --arg prompt "$ollama_prompt" \
+           '{model: $model, prompt: $prompt, stream: false}' > "$tmp_payload"
+        
+        # Pipe directly to jq to avoid shell variable mangling
+        # We also use tr to remove any unexpected raw control characters that might break jq
+        commit_msg=$(curl -s -X POST "${ollama_host}/api/generate" \
+            -H "Content-Type: application/json" \
+            --data-binary @"$tmp_payload" | tr -d '\000-\010\013\014\016-\037' | jq -r '.response // empty')
+    else
+        # Fallback if jq is not installed
+        printf '{"model": "%s", "prompt": "%s", "stream": false}' \
+               "$model" "$(echo "$ollama_prompt" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')" > "$tmp_payload"
+        
+        response_json=$(curl -s -X POST "${ollama_host}/api/generate" \
+            -H "Content-Type: application/json" \
+            --data-binary @"$tmp_payload")
+        
+        commit_msg=$(echo "$response_json" | grep -o '"response":"[^"]*"' | sed 's/"response":"\(.*\)"/\1/' | sed 's/\\n/\n/g' | sed 's/\\"/"/g')
+    fi
+
     local end_time=$SECONDS
     local duration=$(( end_time - start_time ))
-    
-    local ollama_exit_code=$?
-    
-    # Check for errors
-    if [ $ollama_exit_code -ne 0 ]; then
-        if [ -z "$commit_msg" ]; then
-            echo "Error: Failed to generate commit message from Ollama."
-            echo "Exit code: $ollama_exit_code"
-            return 1
-        fi
-        # If we have partial response, continue
-    fi
-    
+
+    # Remove temporary file
+    rm -f "$tmp_payload"
+    trap - EXIT
+
     if [ -z "$commit_msg" ]; then
-        echo "Error: No response from Ollama."
+        echo "Error: Failed to generate commit message from Ollama API."
         return 1
     fi
 
     # Remove any triple backticks if the model included them
     commit_msg=$(echo "$commit_msg" | sed 's/```//g')
+    
+    # If user provided a prefix, prepend it
+    if [ -n "${1:-}" ]; then
+        commit_msg="${1}: ${commit_msg}"
+    fi
 
-    # Record Which AI Model is used for commit msg (without time)
+    # Record Which AI Model is used for commit msg
     model_info="[Generated by ${model}]"
     commit_msg="${commit_msg} | ${model_info}"
     
@@ -127,4 +150,3 @@ ${staged_diff}
         echo "Commit cancelled."
     fi
 }
-

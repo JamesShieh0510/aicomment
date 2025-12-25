@@ -21,10 +21,10 @@ source ~/.zshrc
 
 ### Option 2: Add to .zshrc directly
 
-Copy the function from `aicommit.zshrc` and paste it into your `~/.zshrc` file:
+Copy the function from `aicommit.sh` and paste it into your `~/.zshrc` file:
 
 ```bash
-cat aicommit.zshrc >> ~/.zshrc
+cat aicommit.sh >> ~/.zshrc
 source ~/.zshrc
 ```
 

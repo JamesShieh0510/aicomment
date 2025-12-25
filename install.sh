@@ -9,7 +9,7 @@ else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 ZSHRC="$HOME/.zshrc"
-FUNCTION_FILE="$SCRIPT_DIR/aicommit.zshrc"
+FUNCTION_FILE="$SCRIPT_DIR/aicommit.sh"
 BACKUP_FILE="${ZSHRC}.bak.$(date +%Y%m%d_%H%M%S)"
 
 echo "Installing aicommit function..."
