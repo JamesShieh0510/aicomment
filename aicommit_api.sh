@@ -6,7 +6,7 @@
 #   OLLAMA_HOST: Default to http://localhost:11434
 #   OLLAMA_MODEL: Default to the first available model
 
-aicommits() {
+aicommit() {
     # Check if there are any staged changes
     if git diff --cached --quiet; then
         echo "No staged changes found. Please run 'git add' first."
